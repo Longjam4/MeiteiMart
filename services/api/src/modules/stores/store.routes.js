@@ -31,6 +31,21 @@ router.get(
       },
       { $sort: { distanceMeters: 1 } },
       { $limit: 50 },
+      {
+        $project: {
+          name: 1,
+          description: 1,
+          logoUrl: 1,
+          address: 1,
+          rating: 1,
+          ratingCount: 1,
+          minOrderValue: 1,
+          deliveryFee: 1,
+          freeDeliveryThreshold: 1,
+          avgPrepTimeMinutes: 1,
+          distanceMeters: 1,
+        },
+      },
     ]);
 
     const withEta = stores.map((store) => {
@@ -44,6 +59,22 @@ router.get(
   })
 );
 
+router.get(
+  "/:id",
+  asyncHandler(async (req, res, next) => {
+    if (req.params.id === "me") return next();
+    const store = await Store.findOne({
+      _id: req.params.id,
+      status: SELLER_STATUS.APPROVED,
+      isServiceable: true,
+    }).select(
+      "name description logoUrl address rating ratingCount minOrderValue deliveryFee freeDeliveryThreshold avgPrepTimeMinutes openingHours"
+    );
+    if (!store) throw ApiError.notFound("Store not found");
+    return sendSuccess(res, { data: { store } });
+  })
+);
+
 router.use(requireAuth());
 
 const storeSchema = z.object({
@@ -52,16 +83,18 @@ const storeSchema = z.object({
   logoUrl: z.string().optional(),
   gstNumber: z.string().optional(),
   minOrderValue: z.number().nonnegative().optional(),
+  deliveryFee: z.number().nonnegative().optional(),
+  freeDeliveryThreshold: z.number().nonnegative().optional(),
   avgPrepTimeMinutes: z.number().positive().optional(),
   openingHours: z.object({ open: z.string(), close: z.string() }).optional(),
   address: z
     .object({
-      line1: z.string(),
-      city: z.string(),
-      state: z.string(),
-      postalCode: z.string(),
-      lat: z.number().optional(),
-      lng: z.number().optional(),
+      line1: z.string().trim().min(3),
+      city: z.string().trim().min(2),
+      state: z.string().trim().min(2),
+      postalCode: z.string().trim().min(4),
+      lat: z.number().min(-90).max(90),
+      lng: z.number().min(-180).max(180),
     })
     .optional(),
 });
@@ -81,6 +114,10 @@ router.post(
       description: body.description,
       logoUrl: body.logoUrl,
       gstNumber: body.gstNumber,
+      minOrderValue: body.minOrderValue,
+      deliveryFee: body.deliveryFee,
+      freeDeliveryThreshold: body.freeDeliveryThreshold,
+      avgPrepTimeMinutes: body.avgPrepTimeMinutes,
       address: body.address && {
         line1: body.address.line1,
         city: body.address.city,
@@ -109,7 +146,17 @@ router.patch(
   requirePermissions(PERMISSIONS.STORE_MANAGE),
   asyncHandler(async (req, res) => {
     const body = storeSchema.partial().parse(req.body);
-    const store = await Store.findOneAndUpdate({ owner: req.user.id }, body, { new: true });
+    const update = { ...body };
+    if (body.address) {
+      update.address = {
+        line1: body.address.line1,
+        city: body.address.city,
+        state: body.address.state,
+        postalCode: body.address.postalCode,
+        location: { type: "Point", coordinates: [body.address.lng, body.address.lat] },
+      };
+    }
+    const store = await Store.findOneAndUpdate({ owner: req.user.id }, update, { new: true, runValidators: true });
     if (!store) throw ApiError.notFound("No store found for this seller");
     return sendSuccess(res, { data: { store }, message: "Store updated" });
   })

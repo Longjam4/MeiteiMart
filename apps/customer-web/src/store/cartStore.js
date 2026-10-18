@@ -25,6 +25,24 @@ export const useCartStore = create(
             ],
           };
         }),
+      syncProducts: (products) =>
+        set((state) => {
+          const productsById = new Map(products.map((product) => [product._id, product]));
+          return {
+            items: state.items.map((item) => {
+              const product = productsById.get(item.product);
+              if (!product) return item;
+              return {
+                ...item,
+                name: product.name,
+                price: product.price,
+                unit: product.unit,
+                image: product.images?.[0] || "",
+                stock: product.stock,
+              };
+            }),
+          };
+        }),
       decrement: (productId) =>
         set((state) => {
           const existing = state.items.find((i) => i.product === productId);

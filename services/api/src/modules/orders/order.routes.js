@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { PERMISSIONS, ORDER_STATUS, ORDER_STATUS_FLOW, SOCKET_EVENTS } from "@meiteimart/shared";
+import { PERMISSIONS, ORDER_STATUS, ORDER_STATUS_FLOW, SELLER_STATUS, SOCKET_EVENTS } from "@meiteimart/shared";
 import { Order } from "./order.model.js";
 import { Product } from "../products/product.model.js";
 import { DeliveryProfile } from "../delivery/deliveryProfile.model.js";
@@ -30,7 +30,6 @@ const createOrderSchema = z.object({
     lng: z.number().optional(),
   }),
   paymentMethod: z.enum(["COD", "ONLINE", "WALLET"]).default("COD"),
-  deliveryFee: z.number().nonnegative().default(0),
 });
 
 router.post(
@@ -39,45 +38,92 @@ router.post(
   asyncHandler(async (req, res) => {
     const body = createOrderSchema.parse(req.body);
 
-    const productIds = body.items.map((i) => i.product);
-    const products = await Product.find({ _id: { $in: productIds } });
-    if (products.length !== productIds.length) throw ApiError.badRequest("One or more products are invalid");
+    const store = await Store.findOne({
+      _id: body.store,
+      status: SELLER_STATUS.APPROVED,
+      isServiceable: true,
+    });
+    if (!store) throw ApiError.badRequest("This store is not available for delivery");
 
-    const items = body.items.map((i) => {
-      const product = products.find((p) => String(p._id) === i.product);
-      if (product.stock < i.quantity) throw ApiError.badRequest(`Insufficient stock for ${product.name}`);
+    const requestedQuantities = new Map();
+    for (const item of body.items) {
+      requestedQuantities.set(item.product, (requestedQuantities.get(item.product) || 0) + item.quantity);
+    }
+    const products = await Product.find({
+      _id: { $in: [...requestedQuantities.keys()] },
+      store: store._id,
+      isActive: true,
+      isApproved: true,
+    });
+    if (products.length !== requestedQuantities.size) {
+      throw ApiError.badRequest("One or more products are no longer available from this store");
+    }
+
+    const items = [...requestedQuantities].map(([productId, quantity]) => {
+      const product = products.find((p) => String(p._id) === productId);
+      if (product.stock < quantity) throw ApiError.badRequest(`Insufficient stock for ${product.name}`);
       return {
         product: product._id,
         name: product.name,
         unit: product.unit,
         price: product.price,
-        quantity: i.quantity,
+        quantity,
       };
     });
 
     const itemsTotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
-    const grandTotal = itemsTotal + body.deliveryFee;
+    if (itemsTotal < store.minOrderValue) {
+      throw ApiError.badRequest(`This store has a minimum order value of ₹${store.minOrderValue}`);
+    }
+    const deliveryFee =
+      store.freeDeliveryThreshold > 0 && itemsTotal >= store.freeDeliveryThreshold
+        ? 0
+        : store.deliveryFee;
+    const grandTotal = itemsTotal + deliveryFee;
 
-    const order = await Order.create({
-      orderNumber: generateOrderNumber(),
-      customer: req.user.id,
-      store: body.store,
-      items,
-      itemsTotal,
-      deliveryFee: body.deliveryFee,
-      grandTotal,
-      shippingAddress: {
-        ...body.shippingAddress,
-        location: { type: "Point", coordinates: [body.shippingAddress.lng || 0, body.shippingAddress.lat || 0] },
-      },
-      paymentMethod: body.paymentMethod,
-      status: ORDER_STATUS.PLACED,
-      statusHistory: [{ status: ORDER_STATUS.PLACED }],
-    });
+    const reservedItems = [];
+    for (const item of items) {
+      const reservation = await Product.updateOne(
+        { _id: item.product, stock: { $gte: item.quantity }, isActive: true, isApproved: true },
+        { $inc: { stock: -item.quantity } }
+      );
+      if (reservation.modifiedCount !== 1) {
+        await Promise.all(
+          reservedItems.map((reserved) =>
+            Product.updateOne({ _id: reserved.product }, { $inc: { stock: reserved.quantity } })
+          )
+        );
+        throw ApiError.badRequest(`Insufficient stock for ${item.name}`);
+      }
+      reservedItems.push(item);
+    }
 
-    await Promise.all(
-      items.map((i) => Product.updateOne({ _id: i.product }, { $inc: { stock: -i.quantity } }))
-    );
+    let order;
+    try {
+      order = await Order.create({
+        orderNumber: generateOrderNumber(),
+        customer: req.user.id,
+        store: store._id,
+        items,
+        itemsTotal,
+        deliveryFee,
+        grandTotal,
+        shippingAddress: {
+          ...body.shippingAddress,
+          location: { type: "Point", coordinates: [body.shippingAddress.lng || 0, body.shippingAddress.lat || 0] },
+        },
+        paymentMethod: body.paymentMethod,
+        status: ORDER_STATUS.PLACED,
+        statusHistory: [{ status: ORDER_STATUS.PLACED }],
+      });
+    } catch (error) {
+      await Promise.all(
+        reservedItems.map((reserved) =>
+          Product.updateOne({ _id: reserved.product }, { $inc: { stock: reserved.quantity } })
+        )
+      );
+      throw error;
+    }
 
     getIo()?.to(`store:${body.store}`).emit(SOCKET_EVENTS.ORDER_CREATED, { orderId: order._id, orderNumber: order.orderNumber });
 

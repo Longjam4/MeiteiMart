@@ -1,17 +1,55 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { CATEGORY_META, CATEGORY_IMAGES } from "../data/categories.js";
-import { MOCK_STORES } from "../data/mockData.js";
+import { api } from "../lib/api.js";
+import { CATEGORY_IMAGES } from "../data/categories.js";
 
 export default function CategoryPage() {
   const { slug } = useParams();
-  const category = CATEGORY_META.find((c) => c.slug === slug);
+  const [categories, setCategories] = useState([]);
+  const [products, setProducts] = useState([]);
   const [stores, setStores] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    // Show all stores for now (in a real app, this would filter by category)
-    setStores(MOCK_STORES);
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    setProducts([]);
+    setStores([]);
+    setCategories([]);
+    Promise.all([
+      api.get("/categories"),
+      api.get("/products", { params: { category: slug, limit: 100 } }),
+    ])
+      .then(([categoryResponse, productResponse]) => {
+        if (cancelled) return;
+        const nextProducts = productResponse.data.data.products;
+        const uniqueStores = new Map();
+        nextProducts.forEach((product) => {
+          const store = product.store;
+          if (store?._id) uniqueStores.set(store._id, store);
+        });
+        setCategories(categoryResponse.data.data.categories);
+        setProducts(nextProducts);
+        setStores([...uniqueStores.values()]);
+      })
+      .catch((requestError) => {
+        if (!cancelled) {
+          setError(requestError.response?.data?.message || requestError.message || "Unable to load this category.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [slug]);
+
+  const category = categories.find((item) => item.slug === slug);
+  const categoryName = category?.name || "Category";
+  const storeCount = stores.length;
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-4 pb-20 sm:pb-8">
@@ -25,18 +63,28 @@ export default function CategoryPage() {
       {/* Category banner */}
       <div className="relative h-40 rounded-2xl overflow-hidden mb-6">
         <img
-          src={CATEGORY_IMAGES[slug]}
-          alt={category?.name || "Category"}
+          src={category?.imageUrl || CATEGORY_IMAGES[slug] || ""}
+          alt={categoryName}
           className="w-full h-full object-cover"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
         <div className="absolute bottom-4 left-4 text-white">
-          <p className="text-3xl mb-1">{category?.emoji || "🛍️"}</p>
-          <h1 className="text-2xl font-bold">{category?.name || "Category"}</h1>
+          <p className="text-3xl mb-1">🛍️</p>
+          <h1 className="text-2xl font-bold">{categoryName}</h1>
         </div>
       </div>
 
-      <h2 className="text-lg font-bold mb-3">Stores in this category</h2>
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-lg font-bold">Stores with {categoryName.toLowerCase()}</h2>
+        {!loading && <span className="text-sm text-gray-500">{storeCount} stores</span>}
+      </div>
+      {error && <p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-700">{error}</p>}
+      {loading && <p className="py-8 text-center text-sm text-gray-500">Loading category...</p>}
+      {!loading && !error && products.length === 0 && (
+        <p className="rounded-xl bg-white p-8 text-center text-sm text-gray-500">
+          No products are currently available in this category.
+        </p>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {stores.map((store) => (
           <Link
@@ -46,7 +94,7 @@ export default function CategoryPage() {
           >
             <div className="relative h-32 overflow-hidden">
               <img
-                src={store.logoUrl}
+                src={store.logoUrl || category?.imageUrl || CATEGORY_IMAGES[slug] || ""}
                 alt={store.name}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 loading="lazy"
@@ -66,9 +114,9 @@ export default function CategoryPage() {
                   {store.rating?.toFixed(1)}
                 </span>
                 <span className="text-gray-300">•</span>
-                <span className="text-gray-600">{store.etaMinutes} min</span>
+                <span className="text-gray-600">{store.avgPrepTimeMinutes || 15} min prep</span>
                 <span className="text-gray-300">•</span>
-                <span className="text-gray-600">{store.distanceKm} km</span>
+                <span className="text-gray-600">{store.address?.city || "Delivery available"}</span>
               </div>
             </div>
           </Link>

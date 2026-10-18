@@ -8,6 +8,8 @@ import DeliveryUsers from "./pages/DeliveryUsers.jsx";
 import SupportUsers from "./pages/SupportUsers.jsx";
 import CustomerUsers from "./pages/CustomerUsers.jsx";
 import Categories from "./pages/Categories.jsx";
+import Products from "./pages/Products.jsx";
+import Services from "./pages/Services.jsx";
 import Orders from "./pages/Orders.jsx";
 import Sellers from "./pages/Sellers.jsx";
 import DeliveryPartners from "./pages/DeliveryPartners.jsx";
@@ -34,6 +36,8 @@ export default function App() {
         <Route path="users/support" element={<ProtectedRoute permission="user:manage"><SupportUsers /></ProtectedRoute>} />
         <Route path="users/customers" element={<ProtectedRoute permission="user:manage"><CustomerUsers /></ProtectedRoute>} />
         <Route path="categories" element={<Categories />} />
+        <Route path="products" element={<ProtectedRoute permission="product:approve"><Products /></ProtectedRoute>} />
+        <Route path="services" element={<ProtectedRoute permission="service:manage"><Services /></ProtectedRoute>} />
         <Route path="orders" element={<Orders />} />
         <Route path="sellers" element={<ProtectedRoute permission="store:approve"><Sellers /></ProtectedRoute>} />
         <Route

@@ -1,9 +1,10 @@
 import "dotenv/config";
 import { connectDB, disconnectDB } from "../config/db.js";
-import { ROLES, DEFAULT_ROLE_PERMISSIONS, ROLE_PORTALS, DEFAULT_CATEGORIES } from "@meiteimart/shared";
+import { ROLES, DEFAULT_ROLE_PERMISSIONS, ROLE_PORTALS, DEFAULT_CATEGORIES, CUSTOMER_SERVICES } from "@meiteimart/shared";
 import { Role } from "../modules/roles/role.model.js";
 import { User } from "../modules/users/user.model.js";
 import { Category } from "../modules/categories/category.model.js";
+import { Service } from "../modules/services/service.model.js";
 import { env } from "../config/env.js";
 
 async function seedRoles() {
@@ -30,11 +31,27 @@ async function seedSuperAdmin(roles) {
     console.log("[seed] Skipping Super Admin — set SUPER_ADMIN_EMAIL or SUPER_ADMIN_PHONE in .env");
     return;
   }
-  const existing = await User.findOne({
-    $or: [{ email: env.superAdmin.email }, { phone: env.superAdmin.phone }],
-  });
+
+  const [emailUser, phoneUser] = await Promise.all([
+    env.superAdmin.email ? User.findOne({ email: env.superAdmin.email }) : null,
+    env.superAdmin.phone ? User.findOne({ phone: env.superAdmin.phone }) : null,
+  ]);
+
+  if (emailUser && phoneUser && !emailUser._id.equals(phoneUser._id)) {
+    throw new Error("SUPER_ADMIN_EMAIL and SUPER_ADMIN_PHONE belong to different users");
+  }
+
+  const existing = emailUser || phoneUser;
   if (existing) {
-    console.log("[seed] Super Admin already exists, skipping");
+    existing.name = env.superAdmin.name;
+    existing.email = env.superAdmin.email || existing.email;
+    existing.phone = env.superAdmin.phone || existing.phone;
+    existing.role = roles[ROLES.SUPER_ADMIN]._id;
+    existing.isSuperAdmin = true;
+    existing.isEmailVerified = true;
+    existing.isPhoneVerified = true;
+    await existing.save();
+    console.log(`[seed] Super Admin account restored: ${env.superAdmin.email || env.superAdmin.phone}`);
     return;
   }
   await User.create({
@@ -68,11 +85,29 @@ async function seedCategories() {
   console.log(`[seed] Seeded ${DEFAULT_CATEGORIES.length} top-level categories with subcategories`);
 }
 
+async function seedServices() {
+  for (const [index, service] of CUSTOMER_SERVICES.entries()) {
+    await Service.findOneAndUpdate(
+      { slug: service.slug },
+      {
+        $setOnInsert: {
+          ...service,
+          sortOrder: index,
+          isActive: true,
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  }
+  console.log(`[seed] Seeded ${CUSTOMER_SERVICES.length} customer services`);
+}
+
 async function run() {
   await connectDB();
   const roles = await seedRoles();
   await seedSuperAdmin(roles);
   await seedCategories();
+  await seedServices();
   await disconnectDB();
   console.log("[seed] Done.");
 }

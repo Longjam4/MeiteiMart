@@ -2,33 +2,111 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../lib/api.js";
 import { useGeolocation } from "../lib/useGeolocation.js";
-import { CATEGORY_META, CATEGORY_IMAGES } from "../data/categories.js";
-import { MOCK_STORES } from "../data/mockData.js";
+import { CATEGORY_IMAGES } from "../data/categories.js";
+
+const DEFAULT_LOCATION = { lat: 24.82, lng: 93.94 };
 
 export default function Stores() {
   const { position, error: geoError } = useGeolocation();
   const [stores, setStores] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [categories, setCategories] = useState([]);
+  const [services, setServices] = useState([]);
+  const [serviceLoading, setServiceLoading] = useState(true);
+  const [serviceError, setServiceError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [storeError, setStoreError] = useState("");
+  const [categoryError, setCategoryError] = useState("");
+  const [productResults, setProductResults] = useState([]);
+  const [productSearchLoading, setProductSearchLoading] = useState(false);
+  const [productSearchError, setProductSearchError] = useState("");
   const navigate = useNavigate();
+  const location = position || DEFAULT_LOCATION;
 
   useEffect(() => {
-    if (!position) return;
     setLoading(true);
+    setStoreError("");
     api
-      .get("/stores/nearby", { params: { lat: position.lat, lng: position.lng, radiusKm: 15 } })
+      .get("/stores/nearby", { params: { lat: location.lat, lng: location.lng, radiusKm: 15 } })
       .then((res) => {
-        const apiStores = res.data.data.stores;
-        setStores(apiStores.length > 0 ? apiStores : MOCK_STORES);
+        setStores(res.data.data.stores);
       })
-      .catch(() => setStores(MOCK_STORES))
+      .catch((error) => {
+        setStores([]);
+        setStoreError(error.response?.data?.message || error.message || "Unable to load nearby stores.");
+      })
       .finally(() => setLoading(false));
-  }, [position]);
+  }, [location.lat, location.lng]);
 
-  // If geolocation fails or is pending, show mock stores so the page looks alive
   useEffect(() => {
-    if (geoError && stores.length === 0) setStores(MOCK_STORES);
-  }, [geoError]);
+    let cancelled = false;
+    api
+      .get("/categories")
+      .then((res) => {
+        if (!cancelled) setCategories(res.data.data.categories);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setCategories([]);
+          setCategoryError(error.response?.data?.message || error.message || "Unable to load categories.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get("/services")
+      .then((res) => {
+        if (!cancelled) setServices(res.data.data.services);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setServices([]);
+          setServiceError(error.response?.data?.message || error.message || "Unable to load services.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setServiceLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (!query) {
+      setProductResults([]);
+      setProductSearchError("");
+      setProductSearchLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      setProductSearchLoading(true);
+      setProductSearchError("");
+      api
+        .get("/products", { params: { search: query, limit: 8 }, signal: controller.signal })
+        .then((res) => setProductResults(res.data.data.products))
+        .catch((error) => {
+          if (!controller.signal.aborted) {
+            setProductResults([]);
+            setProductSearchError(error.response?.data?.message || error.message || "Unable to search products.");
+          }
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setProductSearchLoading(false);
+        });
+    }, 250);
+    return () => {
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [searchQuery]);
 
   const filteredStores = searchQuery
     ? stores.filter(
@@ -49,7 +127,11 @@ export default function Stores() {
         <div>
           <p className="font-semibold text-gray-900">Deliver to {position ? "Current Location" : "Imphal"}</p>
           <p className="text-xs text-gray-500">
-            {geoError ? "Using default location" : position ? `${position.lat.toFixed(2)}, ${position.lng.toFixed(2)}` : "Detecting location..."}
+            {geoError
+              ? "Using Imphal as the delivery location"
+              : position
+                ? `${position.lat.toFixed(2)}, ${position.lng.toFixed(2)}`
+                : "Checking your location; using Imphal meanwhile"}
           </p>
         </div>
       </div>
@@ -69,11 +151,83 @@ export default function Stores() {
         />
       </div>
 
+      {searchQuery.trim() && (
+        <section className="mb-6 rounded-2xl border border-gray-100 bg-white p-4">
+          <h2 className="mb-3 text-base font-bold">Matching products</h2>
+          {productSearchLoading && <p className="text-sm text-gray-500">Searching products...</p>}
+          {productSearchError && <p className="text-sm text-red-600">{productSearchError}</p>}
+          {!productSearchLoading && !productSearchError && productResults.length === 0 && (
+            <p className="text-sm text-gray-500">No matching products found.</p>
+          )}
+          <div className="space-y-2">
+            {productResults.map((product) => (
+              <Link
+                key={product._id}
+                to={`/stores/${product.store?._id}`}
+                className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 p-3 hover:bg-brand-50"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-semibold">{product.name}</span>
+                  <span className="block truncate text-xs text-gray-500">{product.store?.name}</span>
+                </span>
+                <span className="shrink-0 font-bold text-brand-600">₹{product.price}</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="mb-8 rounded-2xl bg-[#16213a] p-5 text-white sm:p-7">
+        <p className="mb-1 text-xs font-bold uppercase tracking-wide text-orange-400">
+          All-in-one online services platform
+        </p>
+        <h1 className="text-2xl font-extrabold sm:text-3xl">More than food delivery</h1>
+        <p className="mb-5 mt-2 text-sm text-slate-300 sm:text-base">
+          One app for everyday delivery, goods transport, event rentals and household help.
+        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
+          {serviceLoading && <p className="text-sm text-slate-300">Loading services...</p>}
+          {serviceError && <p className="text-sm text-red-200">{serviceError}</p>}
+          {!serviceLoading && !serviceError && services.length === 0 && (
+            <p className="text-sm text-slate-300">No services are available right now.</p>
+          )}
+          {services.map((service) => (
+            <article
+              key={service._id}
+              className="flex min-h-32 items-center gap-4 bg-white p-4 text-gray-900 shadow-md sm:p-5"
+            >
+              {service.imageUrl ? (
+                <img src={service.imageUrl} alt="" className="h-14 w-14 shrink-0 object-cover shadow-md" />
+              ) : (
+                <span
+                  className="flex h-14 w-14 shrink-0 items-center justify-center text-base font-extrabold text-white shadow-md"
+                  style={{ backgroundColor: service.accent }}
+                >
+                  {service.number}
+                </span>
+              )}
+              <div>
+                <h2 className="text-base font-bold leading-snug sm:text-lg">{service.title}</h2>
+                <p className="mt-2 text-xs leading-relaxed text-gray-600 sm:text-sm">
+                  {service.description}
+                </p>
+                <p className="mt-2 text-xs font-bold" style={{ color: service.accent }}>
+                  Booking: {service.booking}
+                </p>
+              </div>
+            </article>
+          ))}
+        </div>
+        <p className="mt-5 bg-slate-700/70 px-4 py-3 text-center text-xs font-semibold text-slate-200 sm:text-sm">
+          Shared platform: customer app • provider app • payments • booking management • tracking • support
+        </p>
+      </section>
+
       {/* Category carousel */}
       <div className="mb-8">
         <h2 className="text-lg font-bold mb-3">Shop by Category</h2>
         <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
-          {CATEGORY_META.map((cat) => (
+          {categories.map((cat) => (
             <Link
               key={cat.slug}
               to={`/category/${cat.slug}`}
@@ -81,7 +235,7 @@ export default function Stores() {
             >
               <div className="w-16 h-16 rounded-2xl overflow-hidden bg-gray-100 shadow-sm group-hover:shadow-md group-hover:scale-105 transition-all">
                 <img
-                  src={CATEGORY_IMAGES[cat.slug]}
+                  src={cat.imageUrl || CATEGORY_IMAGES[cat.slug] || ""}
                   alt={cat.name}
                   className="w-full h-full object-cover"
                   loading="lazy"
@@ -92,6 +246,10 @@ export default function Stores() {
               </span>
             </Link>
           ))}
+          {categoryError && <p className="text-sm text-red-600">{categoryError}</p>}
+          {!categoryError && categories.length === 0 && (
+            <p className="text-sm text-gray-500">No categories are available yet.</p>
+          )}
         </div>
       </div>
 
@@ -136,6 +294,9 @@ export default function Stores() {
       )}
 
       {!loading && (
+        storeError ? (
+          <p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-700">{storeError}</p>
+        ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredStores.map((store) => (
             <Link
@@ -156,7 +317,7 @@ export default function Stores() {
                   </div>
                 )}
                 <div className="absolute bottom-2 right-2 bg-white/95 backdrop-blur-sm rounded-lg px-2 py-1 text-xs font-semibold text-gray-700 shadow-sm">
-                  {store.etaMinutes || 20} min
+                  {store.etaMinutes ? `${store.etaMinutes} min` : "ETA unavailable"}
                 </div>
               </div>
               <div className="p-3">
@@ -165,11 +326,16 @@ export default function Stores() {
                 <div className="flex items-center gap-3 text-xs">
                   <span className="flex items-center gap-1 font-semibold text-gray-700">
                     <span className="text-green-600">★</span>
-                    {store.rating?.toFixed(1) || "4.0"}
+                    {store.rating?.toFixed(1) || "0.0"}
                     {store.ratingCount && <span className="text-gray-400 font-normal">({store.ratingCount > 999 ? `${(store.ratingCount / 1000).toFixed(1)}k` : store.ratingCount})</span>}
                   </span>
                   <span className="text-gray-300">•</span>
-                  <span className="text-gray-600">{store.distanceKm?.toFixed(1) || "1.0"} km</span>
+                  {Number.isFinite(store.distanceKm) && (
+                    <>
+                      <span className="text-gray-300">•</span>
+                      <span className="text-gray-600">{store.distanceKm.toFixed(1)} km</span>
+                    </>
+                  )}
                   {store.minOrderValue > 0 && (
                     <>
                       <span className="text-gray-300">•</span>
@@ -181,11 +347,14 @@ export default function Stores() {
             </Link>
           ))}
         </div>
+        )
       )}
 
       {!loading && filteredStores.length === 0 && (
         <div className="text-center py-16">
-          <p className="text-gray-500 text-lg">No stores found matching your search.</p>
+          <p className="text-gray-500 text-lg">
+            {searchQuery ? "No stores found matching your search." : "No stores are serving this location yet."}
+          </p>
           <button onClick={() => setSearchQuery("")} className="text-brand-600 font-semibold mt-2 hover:underline">
             Clear search
           </button>

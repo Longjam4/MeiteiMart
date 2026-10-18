@@ -25,6 +25,8 @@ const storeSchema = new Schema(
     rating: { type: Number, default: 0 },
     ratingCount: { type: Number, default: 0 },
     minOrderValue: { type: Number, default: 0 },
+    deliveryFee: { type: Number, default: 15, min: 0 },
+    freeDeliveryThreshold: { type: Number, default: 199, min: 0 },
     avgPrepTimeMinutes: { type: Number, default: 15 },
     openingHours: {
       open: { type: String, default: "09:00" }, // "HH:mm", 24h

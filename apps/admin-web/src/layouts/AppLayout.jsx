@@ -11,6 +11,8 @@ const NAV_ITEMS = [
   { to: "/users/support", label: "Support Users", permission: "user:manage" },
   { to: "/users/customers", label: "Customer Users", permission: "user:manage" },
   { to: "/categories", label: "Categories", permission: "category:read" },
+  { to: "/products", label: "Products", permission: "product:approve" },
+  { to: "/services", label: "Customer Services", permission: "service:manage" },
   { to: "/orders", label: "Orders", permission: "order:read:any" },
   { to: "/sellers", label: "Seller Stores", permission: "store:approve" },
   { to: "/delivery-partners", label: "Delivery Approvals", permission: "delivery-partner:manage" },

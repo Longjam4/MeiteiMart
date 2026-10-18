@@ -1,13 +1,8 @@
 import { useNavigate } from "react-router-dom";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useCartStore } from "../store/cartStore.js";
 import { useAuthStore } from "../store/authStore.js";
-import { api } from "../lib/api.js";
-import { MOCK_STORES } from "../data/mockData.js";
-
-const DELIVERY_FEE = 15;
-const PLATFORM_FEE = 3;
-const GST_RATE = 0.05;
+import { api, getApiErrorMessage } from "../lib/api.js";
 
 export default function Cart() {
   const items = useCartStore((s) => s.items);
@@ -15,18 +10,76 @@ export default function Cart() {
   const decrement = useCartStore((s) => s.decrement);
   const removeItem = useCartStore((s) => s.removeItem);
   const clear = useCartStore((s) => s.clear);
+  const syncProducts = useCartStore((s) => s.syncProducts);
   const user = useAuthStore((s) => s.user);
   const navigate = useNavigate();
 
   const [placing, setPlacing] = useState(false);
   const [error, setError] = useState("");
+  const [catalogLoading, setCatalogLoading] = useState(items.length > 0);
+  const [catalogError, setCatalogError] = useState("");
+  const [store, setStore] = useState(null);
   const [address, setAddress] = useState({ line1: "", city: "Imphal", state: "Manipur", postalCode: "795001" });
+  const storeId = items[0]?.store;
+  const cartSignature = items
+    .map((item) => `${item.product}:${item.quantity}`)
+    .sort()
+    .join(",");
+
+  useEffect(() => {
+    if (!storeId) {
+      setCatalogLoading(false);
+      setCatalogError("");
+      setStore(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setCatalogLoading(true);
+    setCatalogError("");
+    Promise.all([
+      api.get(`/stores/${storeId}`),
+      api.get("/products", { params: { store: storeId, limit: 100 } }),
+    ])
+      .then(([storeResponse, productResponse]) => {
+        if (cancelled) return;
+        const currentProducts = productResponse.data.data.products;
+        const availableIds = new Set(currentProducts.map((product) => product._id));
+        const missingProduct = items.some((item) => !availableIds.has(item.product));
+        const insufficientStock = items.find((item) => {
+          const currentProduct = currentProducts.find((product) => product._id === item.product);
+          return currentProduct && item.quantity > currentProduct.stock;
+        });
+        setStore(storeResponse.data.data.store);
+        syncProducts(currentProducts);
+        if (missingProduct) {
+          setCatalogError("Some items in your cart are no longer available. Remove them before placing your order.");
+        } else if (insufficientStock) {
+          setCatalogError(`There is not enough stock for ${insufficientStock.name}. Reduce the quantity before placing your order.`);
+        }
+      })
+      .catch((requestError) => {
+        if (!cancelled) {
+          setStore(null);
+          setCatalogError(getApiErrorMessage(requestError, "Unable to refresh your cart from the store."));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCatalogLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [storeId, cartSignature, syncProducts]);
 
   const itemsTotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
-  const deliveryFee = itemsTotal > 199 ? 0 : DELIVERY_FEE;
-  const platformFee = PLATFORM_FEE;
-  const gst = Math.round(itemsTotal * GST_RATE);
-  const grandTotal = itemsTotal + deliveryFee + platformFee + gst;
+  const minOrderValue = store?.minOrderValue || 0;
+  const belowMinimum = itemsTotal < minOrderValue;
+  const freeDeliveryThreshold = store?.freeDeliveryThreshold || 0;
+  const deliveryFee =
+    freeDeliveryThreshold > 0 && itemsTotal >= freeDeliveryThreshold ? 0 : store?.deliveryFee || 0;
+  const grandTotal = itemsTotal + deliveryFee;
 
   async function placeOrder() {
     if (!user) {
@@ -36,20 +89,16 @@ export default function Cart() {
     setError("");
     setPlacing(true);
     try {
-      const storeId = items[0]?.store;
       await api.post("/orders", {
         store: storeId,
         items: items.map((i) => ({ product: i.product, quantity: i.quantity })),
         shippingAddress: address,
         paymentMethod: "COD",
-        deliveryFee,
       });
       clear();
       navigate("/orders");
-    } catch (err) {
-      // If API fails (no backend), simulate success with mock
-      clear();
-      navigate("/orders");
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, "Unable to place your order. Please try again."));
     } finally {
       setPlacing(false);
     }
@@ -75,7 +124,7 @@ export default function Cart() {
     );
   }
 
-  const storeName = MOCK_STORES.find((s) => s._id === items[0]?.store)?.name || "Store";
+  const storeName = store?.name || "Loading store...";
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-4 pb-24 sm:pb-8">
@@ -89,6 +138,9 @@ export default function Cart() {
               <span className="text-lg">🛒</span>
               <h2 className="font-bold">{storeName}</h2>
             </div>
+            {catalogLoading && <p className="mb-3 text-xs text-gray-500">Refreshing prices and availability...</p>}
+            {catalogError && <p role="alert" className="mb-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">{catalogError}</p>}
+            {belowMinimum && <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">Add ₹{(minOrderValue - itemsTotal).toFixed(2)} more to meet this store&apos;s ₹{minOrderValue} minimum order.</p>}
             {items.map((i) => (
               <div key={i.product} className="flex items-center gap-3 py-3 border-b border-gray-50 last:border-0">
                 <div className="w-16 h-16 rounded-xl overflow-hidden bg-gray-100 shrink-0">
@@ -108,7 +160,7 @@ export default function Cart() {
                     −
                   </button>
                   <span className="px-1 py-1.5 min-w-[28px] text-center">{i.quantity}</span>
-                  <button onClick={() => addItem({ _id: i.product, name: i.name, price: i.price, unit: i.unit, images: [i.image] }, i.store)} className="px-3 py-1.5 hover:bg-brand-100 rounded-r-xl transition-colors">
+                  <button onClick={() => addItem({ _id: i.product, name: i.name, price: i.price, unit: i.unit, images: [i.image] }, i.store)} disabled={i.quantity >= i.stock} className="px-3 py-1.5 hover:bg-brand-100 rounded-r-xl disabled:opacity-50 transition-colors">
                     +
                   </button>
                 </div>
@@ -177,35 +229,21 @@ export default function Cart() {
                   {deliveryFee === 0 ? <span className="text-green-600">FREE</span> : `₹${deliveryFee}`}
                 </span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">Platform Fee</span>
-                <span className="font-medium">₹{platformFee}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">GST & Charges</span>
-                <span className="font-medium">₹{gst}</span>
-              </div>
-              {deliveryFee === 0 && (
-                <div className="flex justify-between text-green-600">
-                  <span>Free Delivery Savings</span>
-                  <span>−₹{DELIVERY_FEE}</span>
-                </div>
-              )}
             </div>
             <div className="border-t border-gray-100 mt-3 pt-3 flex justify-between font-bold text-base">
               <span>To Pay</span>
               <span>₹{grandTotal}</span>
             </div>
 
-            {itemsTotal < 199 && (
+            {freeDeliveryThreshold > 0 && itemsTotal < freeDeliveryThreshold && (
               <div className="mt-3 bg-amber-50 rounded-xl p-2.5 text-xs text-amber-700 text-center">
-                Add ₹{199 - itemsTotal} more for FREE delivery!
+                Add ₹{freeDeliveryThreshold - itemsTotal} more for FREE delivery!
               </div>
             )}
 
             <button
               onClick={placeOrder}
-              disabled={placing || !address.line1}
+              disabled={placing || catalogLoading || Boolean(catalogError) || belowMinimum || !store || !address.line1}
               className="w-full mt-4 bg-brand-600 hover:bg-brand-700 text-white font-bold rounded-xl py-3.5 disabled:opacity-50 transition-colors"
             >
               {placing ? "Placing Order..." : `Place Order • ₹${grandTotal}`}

@@ -23,8 +23,8 @@ const addressSubSchema = new Schema(
 const userSchema = new Schema(
   {
     name: { type: String, required: true, trim: true },
-    email: { type: String, lowercase: true, trim: true, sparse: true },
-    phone: { type: String, trim: true, sparse: true },
+    email: { type: String, lowercase: true, trim: true },
+    phone: { type: String, trim: true },
     avatarUrl: { type: String, default: "" },
 
     role: { type: Schema.Types.ObjectId, ref: "Role", required: true },

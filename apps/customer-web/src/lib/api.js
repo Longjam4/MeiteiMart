@@ -1,8 +1,10 @@
 import axios from "axios";
 import { useAuthStore } from "../store/authStore.js";
 
+export const API_URL = (import.meta.env.VITE_API_URL || "http://localhost:8080").replace(/\/+$/, "");
+
 export const api = axios.create({
-  baseURL: `${import.meta.env.VITE_API_URL}/api`,
+  baseURL: `${API_URL}/api`,
   withCredentials: true,
 });
 
@@ -20,7 +22,7 @@ api.interceptors.response.use(
       original._retry = true;
       try {
         const { data } = await axios.post(
-          `${import.meta.env.VITE_API_URL}/api/auth/refresh`,
+          `${API_URL}/api/auth/refresh`,
           {},
           { withCredentials: true }
         );
@@ -34,3 +36,7 @@ api.interceptors.response.use(
     throw error;
   }
 );
+
+export function getApiErrorMessage(error, fallback) {
+  return error.response?.data?.message || error.message || fallback;
+}

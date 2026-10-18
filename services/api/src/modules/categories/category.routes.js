@@ -11,8 +11,8 @@ import { ApiError } from "../../utils/ApiError.js";
 const router = Router();
 
 const categorySchema = z.object({
-  name: z.string().min(2),
-  slug: z.string().min(2),
+  name: z.string().trim().min(2),
+  slug: z.string().trim().toLowerCase().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   imageUrl: z.string().optional(),
   parent: z.string().nullable().optional(),
   sortOrder: z.number().optional(),
@@ -46,6 +46,10 @@ router.patch(
   requirePermissions(PERMISSIONS.CATEGORY_UPDATE),
   asyncHandler(async (req, res) => {
     const body = categorySchema.partial().parse(req.body);
+    if (body.slug) {
+      const duplicate = await Category.findOne({ slug: body.slug, _id: { $ne: req.params.id } });
+      if (duplicate) throw ApiError.conflict("A category with this slug already exists");
+    }
     const category = await Category.findByIdAndUpdate(req.params.id, body, { new: true });
     if (!category) throw ApiError.notFound("Category not found");
     return sendSuccess(res, { data: { category }, message: "Category updated" });

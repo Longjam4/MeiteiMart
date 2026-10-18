@@ -18,6 +18,7 @@
   ],
   "scripts": {
     "dev:api": "npm run dev --workspace=services/api",
+    "dev:all-webs": "concurrently -k -n admin,customer,delivery,seller,support \"npm run dev:admin\" \"npm run dev:customer\" \"npm run dev:delivery\" \"npm run dev:seller\" \"npm run dev:support\"",
     "dev:admin": "npm run dev --workspace=apps/admin-web",
     "dev:customer": "npm run dev --workspace=apps/customer-web",
     "dev:delivery": "npm run dev --workspace=apps/delivery-web",
@@ -35,6 +36,9 @@
   },
   "engines": {
     "node": ">=18.18.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   },
   "license": "UNLICENSED"
 }

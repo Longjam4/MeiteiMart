@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { api } from "../lib/api.js";
 import { useCartStore } from "../store/cartStore.js";
-import { MOCK_STORES, MOCK_PRODUCTS } from "../data/mockData.js";
-import { CATEGORY_META } from "../data/categories.js";
+import { CATEGORY_IMAGES } from "../data/categories.js";
 
 export default function StoreDetail() {
   const { storeId } = useParams();
@@ -11,6 +10,7 @@ export default function StoreDetail() {
   const [products, setProducts] = useState([]);
   const [store, setStore] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [activeCategory, setActiveCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const addItem = useCartStore((s) => s.addItem);
@@ -19,40 +19,50 @@ export default function StoreDetail() {
   const cartTotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
-    // Try API first, fall back to mock data
-    api
-      .get("/products", { params: { store: storeId, limit: 100 } })
-      .then((res) => {
-        const apiProducts = res.data.data.products;
-        if (apiProducts.length > 0) {
-          setProducts(apiProducts);
-          const mockStore = MOCK_STORES.find((s) => s._id === storeId);
-          setStore(mockStore || apiProducts[0]?.store || null);
-        } else {
-          const mockStore = MOCK_STORES.find((s) => s._id === storeId);
-          setStore(mockStore || MOCK_STORES[0]);
-          setProducts(MOCK_PRODUCTS.filter((p) => p.store === storeId));
-        }
+    setLoadError("");
+    setStore(null);
+    setProducts([]);
+    Promise.all([
+      api.get(`/stores/${storeId}`),
+      api.get("/products", { params: { store: storeId, limit: 100 } }),
+    ])
+      .then(([storeResponse, productResponse]) => {
+        if (cancelled) return;
+        setStore(storeResponse.data.data.store);
+        setProducts(productResponse.data.data.products);
       })
-      .catch(() => {
-        const mockStore = MOCK_STORES.find((s) => s._id === storeId);
-        setStore(mockStore || MOCK_STORES[0]);
-        setProducts(MOCK_PRODUCTS.filter((p) => p.store === storeId));
+      .catch((error) => {
+        if (cancelled) return;
+        setStore(null);
+        setProducts([]);
+        setLoadError(error.response?.data?.message || error.message || "Unable to load this store.");
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [storeId]);
 
   const cartHasOtherStore = items.length > 0 && items[0].store !== storeId;
 
-  const categories = [...new Set(products.map((p) => p.category))];
-  const categoryNames = categories.map((slug) => {
-    const meta = CATEGORY_META.find((c) => c.slug === slug);
-    return { slug, name: meta?.name || slug };
-  });
+  const categoryNames = [
+    ...new Map(
+      products.map((product) => {
+        const category = product.category;
+        const slug = typeof category === "object" ? category.slug : category;
+        const categoryName = typeof category === "object" ? category.name : slug;
+        return [slug, { slug, name: categoryName || slug }];
+      })
+    ).values(),
+  ];
 
   const filteredProducts = products.filter((p) => {
-    const matchesCategory = activeCategory === "all" || p.category === activeCategory;
+    const productCategory = typeof p.category === "object" ? p.category.slug : p.category;
+    const matchesCategory = activeCategory === "all" || productCategory === activeCategory;
     const matchesSearch = !searchQuery || p.name.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCategory && matchesSearch;
   });
@@ -71,11 +81,17 @@ export default function StoreDetail() {
         Back to stores
       </Link>
 
+      {loadError && (
+        <div role="alert" className="mb-4 rounded-xl bg-red-50 p-4 text-sm text-red-700">
+          {loadError}
+        </div>
+      )}
+
       {/* Store header */}
       <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden mb-4">
         <div className="h-40 sm:h-48 overflow-hidden relative">
           <img
-            src={store?.logoUrl || "https://images.pexels.com/photos/9705821/pexels-photo-9705821.jpeg?auto=compress&cs=tinysrgb&h=650&w=940"}
+            src={store?.logoUrl || ""}
             alt={store?.name}
             className="w-full h-full object-cover"
           />
@@ -91,12 +107,12 @@ export default function StoreDetail() {
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <span className="flex items-center gap-1 font-semibold">
               <span className="bg-green-600 text-white px-1.5 py-0.5 rounded text-xs">★</span>
-              {store?.rating?.toFixed(1) || "4.0"}
+              {store?.rating?.toFixed(1) || "0.0"}
             </span>
             <span className="text-gray-300">|</span>
-            <span className="text-gray-600">{store?.etaMinutes || 20} min delivery</span>
+            <span className="text-gray-600">{store?.avgPrepTimeMinutes || 15} min prep</span>
             <span className="text-gray-300">|</span>
-            <span className="text-gray-600">{store?.distanceKm?.toFixed(1) || "1.0"} km away</span>
+            <span className="text-gray-600">{store?.address?.city || "Local delivery"}</span>
             {store?.minOrderValue > 0 && (
               <>
                 <span className="text-gray-300">|</span>
@@ -189,7 +205,7 @@ export default function StoreDetail() {
                 <div className="relative shrink-0">
                   <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-xl overflow-hidden bg-gray-100">
                     <img
-                      src={p.images?.[0] || "https://images.pexels.com/photos/220911/pexels-photo-220911.jpeg?auto=compress&cs=tinysrgb&h=650&w=940"}
+                      src={p.images?.[0] || CATEGORY_IMAGES[p.category?.slug] || ""}
                       alt={p.name}
                       className="w-full h-full object-cover"
                       loading="lazy"
@@ -198,9 +214,10 @@ export default function StoreDetail() {
                   {qty === 0 ? (
                     <button
                       onClick={() => addItem(p, storeId)}
-                      className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-white border-2 border-brand-600 text-brand-600 font-bold text-sm px-5 py-1.5 rounded-xl shadow-sm hover:bg-brand-50 transition-colors whitespace-nowrap"
+                      disabled={p.stock <= 0}
+                      className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-white border-2 border-brand-600 text-brand-600 font-bold text-sm px-5 py-1.5 rounded-xl shadow-sm hover:bg-brand-50 disabled:opacity-50 transition-colors whitespace-nowrap"
                     >
-                      ADD +
+                      {p.stock <= 0 ? "OUT OF STOCK" : "ADD +"}
                     </button>
                   ) : (
                     <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-brand-600 text-white font-bold text-sm rounded-xl shadow-sm flex items-center">
@@ -213,7 +230,8 @@ export default function StoreDetail() {
                       <span className="px-1 py-1.5 min-w-[24px] text-center">{qty}</span>
                       <button
                         onClick={() => addItem(p, storeId)}
-                        className="px-3 py-1.5 hover:bg-brand-700 rounded-r-xl transition-colors"
+                        disabled={qty >= p.stock}
+                        className="px-3 py-1.5 hover:bg-brand-700 rounded-r-xl disabled:opacity-50 transition-colors"
                       >
                         +
                       </button>

@@ -6,6 +6,7 @@ import { useAuthStore } from "./src/store/authStore.js";
 import LoginScreen from "./src/screens/LoginScreen.js";
 import HomeScreen from "./src/screens/HomeScreen.js";
 import OrdersScreen from "./src/screens/OrdersScreen.js";
+import CartScreen from "./src/screens/CartScreen.js";
 
 const Stack = createNativeStackNavigator();
 
@@ -25,6 +26,7 @@ export default function App() {
         {accessToken ? (
           <>
             <Stack.Screen name="Home" component={HomeScreen} />
+            <Stack.Screen name="Cart" component={CartScreen} />
             <Stack.Screen name="Orders" component={OrdersScreen} options={{ headerShown: true }} />
           </>
         ) : (

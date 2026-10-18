@@ -25,9 +25,7 @@ export default function Login() {
       setChannel(data.data.channel);
       setStep("otp");
     } catch (err) {
-      // If API not available, simulate OTP flow
-      setChannel(identifier.includes("@") ? "EMAIL" : "MOBILE");
-      setStep("otp");
+      setError(err.response?.data?.message || err.message || "Unable to request an OTP.");
     } finally {
       setLoading(false);
     }
@@ -42,12 +40,7 @@ export default function Login() {
       setSession({ accessToken: data.data.accessToken, user: data.data.user });
       navigate("/");
     } catch (err) {
-      // If API not available, simulate login
-      setSession({
-        accessToken: "demo-token",
-        user: { name: name || "Guest User", email: identifier.includes("@") ? identifier : "", phone: identifier.includes("@") ? "" : identifier, role: "CUSTOMER" },
-      });
-      navigate("/");
+      setError(err.response?.data?.message || err.message || "Unable to verify your OTP.");
     } finally {
       setLoading(false);
     }

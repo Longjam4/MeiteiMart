@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../lib/api.js";
+import { api, getApiErrorMessage } from "../lib/api.js";
 import { getSocket } from "../lib/socket.js";
-import { useAuthStore } from "../store/authStore.js";
-import { MOCK_ORDERS } from "../data/mockData.js";
 
 const STATUS_STEPS = [
   { key: "PLACED", label: "Order Placed", icon: "📝" },
@@ -24,17 +22,19 @@ export default function Orders() {
   const [loading, setLoading] = useState(true);
   const [tracking, setTracking] = useState({});
   const [ratingDrafts, setRatingDrafts] = useState({});
+  const [ratingErrors, setRatingErrors] = useState({});
   const [submitting, setSubmitting] = useState(null);
-  const user = useAuthStore((s) => s.user);
+  const [loadError, setLoadError] = useState("");
   const navigate = useNavigate();
 
   async function load() {
     try {
       const res = await api.get("/orders");
-      const apiOrders = res.data.data.orders;
-      setOrders(apiOrders.length > 0 ? apiOrders : MOCK_ORDERS);
-    } catch {
-      setOrders(MOCK_ORDERS);
+      setOrders(res.data.data.orders);
+      setLoadError("");
+    } catch (error) {
+      setOrders([]);
+      setLoadError(getApiErrorMessage(error, "Unable to load your orders."));
     } finally {
       setLoading(false);
     }
@@ -70,18 +70,15 @@ export default function Orders() {
   async function submitRating(orderId) {
     const draft = ratingDrafts[orderId] || {};
     setSubmitting(orderId);
+    setRatingErrors((prev) => ({ ...prev, [orderId]: "" }));
     try {
       await api.post(`/orders/${orderId}/rate`, draft);
       await load();
-    } catch {
-      // If API fails, just mark as rated locally
-      setOrders((prev) =>
-        prev.map((o) =>
-          o._id === orderId
-            ? { ...o, rating: { ...draft, ratedAt: new Date().toISOString() } }
-            : o
-        )
-      );
+    } catch (error) {
+      setRatingErrors((prev) => ({
+        ...prev,
+        [orderId]: getApiErrorMessage(error, "Unable to submit your rating."),
+      }));
     } finally {
       setSubmitting(null);
     }
@@ -102,6 +99,10 @@ export default function Orders() {
           ))}
         </div>
       ) : (
+        <>
+        {loadError && (
+          <p role="alert" className="mb-4 rounded-xl bg-red-50 p-4 text-sm text-red-700">{loadError}</p>
+        )}
         <div className="space-y-4">
           {orders.map((o) => {
             const currentStep = getStatusIndex(o.status);
@@ -226,6 +227,9 @@ export default function Orders() {
                     >
                       {submitting === o._id ? "Submitting..." : "Submit Rating"}
                     </button>
+                    {ratingErrors[o._id] && (
+                      <p role="alert" className="mt-2 text-sm text-red-600">{ratingErrors[o._id]}</p>
+                    )}
                   </div>
                 )}
 
@@ -241,7 +245,7 @@ export default function Orders() {
               </div>
             );
           })}
-          {orders.length === 0 && !loading && (
+          {orders.length === 0 && !loading && !loadError && (
             <div className="text-center py-16">
               <p className="text-gray-500 text-lg mb-4">No orders yet.</p>
               <button onClick={() => navigate("/")} className="bg-brand-600 text-white font-semibold rounded-xl px-6 py-3 hover:bg-brand-700 transition-colors">
@@ -250,6 +254,7 @@ export default function Orders() {
             </div>
           )}
         </div>
+        </>
       )}
     </div>
   );
